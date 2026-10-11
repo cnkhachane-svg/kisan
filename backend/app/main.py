@@ -1,14 +1,5 @@
 """
 main.py - The Main Application Entry Point
-
-This is the heart of the backend. It:
-1. Creates the FastAPI application
-2. Sets up CORS (so the frontend can talk to the backend)
-3. Creates all database tables
-4. Includes all the API routers
-5. Creates a default admin account (for local development only)
-
-When you run "uvicorn app.main:app", this file is loaded first.
 """
 
 from fastapi import FastAPI
@@ -27,41 +18,50 @@ app = FastAPI(
 )
 
 # ----- CORS MIDDLEWARE -----
+# Allows localhost as well as ANY Vercel production or preview deployment URL
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "https://kisan-mu.vercel.app",
+    ],
+    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ----- INCLUDE ROUTERS -----
-# Each router handles a group of related endpoints
-app.include_router(auth.router)
-app.include_router(products.router)
-app.include_router(orders.router)
-app.include_router(admin.router)
-app.include_router(logistics.router)
-app.include_router(forecasts.router)
-app.include_router(mandi.router)
+# Mounted both with and without "/api" so neither the frontend nor external requests hit 404 Not Found
+routers = [
+    auth.router,
+    products.router,
+    orders.router,
+    admin.router,
+    logistics.router,
+    forecasts.router,
+    mandi.router,
+]
+
+for router in routers:
+    app.include_router(router)
+    # If the router doesn't already have an /api prefix, alias it under /api too
+    if not (router.prefix and router.prefix.startswith("/api")):
+        app.include_router(router, prefix="/api")
 
 
 # ----- STARTUP EVENT -----
 @app.on_event("startup")
 def on_startup():
     """
-    This runs when the server starts.
-    
-    It creates all database tables (if they don't exist yet)
-    and creates a default admin account for local development.
+    Creates tables and seeds demo products if the database is newly initialized.
     """
-    # Create all tables in the database
     Base.metadata.create_all(bind=engine)
     
-    # Create default admin account (LOCAL DEVELOPMENT ONLY)
-    # In production, you would create admin accounts through a secure process
     db = SessionLocal()
     try:
+        # Create default admin account
         existing_admin = db.query(User).filter(User.email == "admin@marketplace.com").first()
         if not existing_admin:
             admin_user = User(
@@ -74,26 +74,25 @@ def on_startup():
             db.add(admin_user)
             db.commit()
             print("[OK] Default admin account created: admin@marketplace.com / admin123")
-            print("[WARNING] Change this password in production!")
-        else:
-            print("[INFO] Admin account already exists.")
-            
-        # If products table is empty (such as on first cloud deployment), auto-seed demo catalog
+
+        # Auto-seed demo catalog if empty
         product_count = db.query(Product).count()
         if product_count == 0:
-            print("[INFO] Database empty - auto-seeding produce catalog and demo accounts...")
-            from app.seed import seed_database
-            seed_database()
+            print("[INFO] Database empty - auto-seeding produce catalog...")
+            try:
+                from app.seed import seed_database
+                seed_database()
+            except ImportError:
+                print("[WARNING] app.seed module not found, skipping automatic seed.")
     except Exception as e:
         print(f"[STARTUP WARNING] Database startup check: {e}")
     finally:
         db.close()
 
 
-# ----- ROOT ENDPOINT -----
+# ----- ROOT & HEALTH CHECK ENDPOINTS -----
 @app.get("/")
 def root():
-    """A simple endpoint to verify the API is running."""
     return {
         "message": "🌾 Farmer Marketplace API is running!",
         "docs": "Visit /docs for interactive API documentation",
@@ -102,6 +101,6 @@ def root():
 
 
 @app.get("/api/health")
+@app.get("/health")
 def health_check():
-    """Health check endpoint."""
     return {"status": "healthy"}
